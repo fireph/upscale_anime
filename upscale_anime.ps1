@@ -39,7 +39,6 @@ if ((Test-Path ".\tmp_frames") -eq $true) {
 if ((Test-Path ".\out_frames") -eq $true) {
     Remove-Item ".\out_frames" -Recurse > $null
 }
-Clear-RecycleBin -Force > $null
 New-Item -Path ".\tmp_frames" -ItemType Directory -Force > $null
 New-Item -Path ".\out_frames" -ItemType Directory -Force > $null
 New-Item -Path ".\upscaled_videos" -ItemType Directory -Force > $null
@@ -74,6 +73,7 @@ $jobUpscalePNGs = Start-Job –Name upscale –Scriptblock {
         $framerate,
         $input_file
     )
+    $cleanedup_until = 0
     $upscale_stopwatch = [System.Diagnostics.Stopwatch]::new()
     $upscale_stopwatch.Start()
     $esrgan_progress = 0
@@ -96,6 +96,14 @@ $jobUpscalePNGs = Start-Job –Name upscale –Scriptblock {
             $remaining_secs = ($framecount - $esrgan_progress) / $fps
             $remaining_timespan = [timespan]::fromseconds($remaining_secs)
             $remaining_str = $remaining_timespan.ToString("hh'h:'mm'm:'ss's'")
+            if (($esrgan_progress - $cleanedup_until) -gt 500) {
+                $next_cleanup_until = $esrgan_progress - 500
+                ($cleanedup_until+1)..$next_cleanup_until | ForEach-Object {
+                    $pad_num = ([string]$_).PadLeft(8,'0')
+                    Remove-Item "tmp_frames/frame${pad_num}.png"
+                }
+                $cleanedup_until = $next_cleanup_until
+            }
             Write-Progress -Activity "(2/3) Upscaling PNGs: ${basename}" -Status "${percent_str}% (${fps_str} fps - ${remaining_str})" -PercentComplete $percent
         }
     }
@@ -120,6 +128,7 @@ $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
         $framerate,
         $input_file
     )
+    $cleanedup_until = 0
     & ffmpeg -y -framerate $framerate -i out_frames/frame%08d.png -i $input_file -map 0:v:0 -map 1:a:0 -c:a copy -c:v libx265 -preset slow -crf 18 -r $framerate -pix_fmt yuv420p10le -x265-params profile=main10:bframes=8:psy-rd=1:aq-mode=3 -v warning -stats "upscaled_videos/${basename}_upscaled${extension}" 2>&1 | %{
         $found = $_ -match "frame=[ \t]*([0-9]+)[ \t]*fps=[ \t]*([0-9.]+)"
         if ($found) {
@@ -131,6 +140,14 @@ $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
             $remaining_secs = ($framecount - $current_frame) / $fps
             $remaining_timespan = [timespan]::fromseconds($remaining_secs)
             $remaining_str = $remaining_timespan.ToString("hh'h:'mm'm:'ss's'")
+            if (($current_frame - $cleanedup_until) -gt 500) {
+                $next_cleanup_until = $current_frame - 500
+                ($cleanedup_until+1)..$next_cleanup_until | ForEach-Object {
+                    $pad_num = ([string]$_).PadLeft(8,'0')
+                    Remove-Item "out_frames/frame${pad_num}.png"
+                }
+                $cleanedup_until = $next_cleanup_until
+            }
             Write-Progress -Activity "(3/3) Encoding to video file: ${basename}" -Status "${percent_str}% (${fps_str} fps - ${remaining_str})" -PercentComplete $percent
         }
     }

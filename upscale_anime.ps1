@@ -6,10 +6,7 @@ if ((Test-Path -Path $input_file_path) -ne $true) {
 $input_file = Get-Item $input_file_path
 
 #Accepts a Job as a parameter and writes the latest progress of it
-function WriteJobProgress
-{
-    param($Job)
- 
+function WriteJobProgress($Job, $JobId) {
     #Make sure the first child job exists
     if($Job.ChildJobs[0].Progress -ne $null)
     {
@@ -19,11 +16,16 @@ function WriteJobProgress
         $latestPercentComplete = $latestProgress | Select -expand PercentComplete;
         $latestActivity = $latestProgress | Select -expand Activity;
         $latestStatus = $latestProgress | Select -expand StatusDescription;
+
+        if ($JobId -eq $null) {
+            $JobId = $Job.Id
+        }
     
         #When adding multiple progress bars, a unique ID must be provided. Here I am providing the JobID as this
-        Write-Progress -Id $Job.Id -Activity $latestActivity -Status $latestStatus -PercentComplete $latestPercentComplete;
+        Write-Progress -Id $JobId -Activity $latestActivity -Status $latestStatus -PercentComplete $latestPercentComplete;
     }
 }
+
 
 $begin_stopwatch = [System.Diagnostics.Stopwatch]::new()
 $begin_stopwatch.Start()
@@ -45,24 +47,56 @@ New-Item -Path ".\upscaled_videos" -ItemType Directory -Force > $null
 $framecount = mediainfo --Output="Video;%FrameCount%" $input_file
 $framerate = mediainfo --Output="Video;%FrameRate%" $input_file
 Write-Host "Converting video with ${framecount} frames at ${framerate} fps"
-$export_id = Get-Random
-& ffmpeg -i $input_file -qscale:v 1 -qmin 1 -qmax 1 -fps_mode passthrough -v warning -stats tmp_frames/frame%08d.png 2>&1 | %{
-    $found = $_ -match "frame=[ \t]*([0-9]+)[ \t]*fps=[ \t]*([0-9.]+)"
-    if ($found) {
-        $current_frame = [int]$matches[1]
-        $current_fps = $matches[2]
-        $percent = ($current_frame / $framecount) * 100
-        $percent_str = ('{0:0.#}' -f $percent)
-        Write-Progress -Id $export_id -Activity "(1/3) Exporting video to PNGs: ${basename}" -Status "${percent_str}% Complete (${current_fps} fps)" -PercentComplete $percent
+
+
+# Create blank files for upscaling/ffmpeg
+$generate_blanks_id = Get-Random
+$generate_blanks_stopwatch = [System.Diagnostics.Stopwatch]::new()
+$generate_blanks_stopwatch.Start()
+for ($i=1; $i -le $framecount; $i++) {
+    $pad_num = ([string]$i).PadLeft(8,'0')
+    Set-Content -Path "tmp_frames/frame${pad_num}.png" -value $null
+    Set-Content -Path "out_frames/frame${pad_num}.png" -value $null
+    if ($generate_blanks_stopwatch.ElapsedMilliseconds -ge 1000) {
+        $percent = $i / $framecount * 100
+        $percent_str = $percent_str = ('{0:0.##}' -f $percent)
+        Write-Progress -Id $generate_blanks_id -Activity "(0/3) Generating blank PNGs: ${basename}" -Status "${percent_str}% Complete" -PercentComplete $percent
+        $generate_blanks_stopwatch.Restart()
+    }
+}
+$generate_blanks_stopwatch.Stop()
+Write-Progress -Id $generate_blanks_id -Activity "(0/3) Generating blank PNGs: ${basename}" -Status "100% Complete" -PercentComplete 100
+
+
+$chunk_size = 2000
+
+
+$scriptBlockExportPNGs = {
+    Param(
+        $basename,
+        $extension,
+        $framecount,
+        $framerate,
+        $input_file,
+        $chunk_size,
+        $start_index
+    )
+    $end_index = (($start_index + $chunk_size - 1),$framecount | Measure -Min).Minimum
+    & ffmpeg -y -i $input_file -vf select="between(n\,${start_index}\,${end_index})" -vframes $chunk_size -start_number $start_index -qscale:v 1 -qmin 1 -qmax 1 -fps_mode passthrough -v warning -stats tmp_frames/frame%08d.png 2>&1 | %{
+        $found = $_ -match "frame=[ \t]*([0-9]+)[ \t]*fps=[ \t]*([0-9.]+)"
+        if ($found) {
+            $current_frame = [int]$matches[1] + $start_index
+            $current_fps = $matches[2]
+            $percent = ($current_frame / $framecount) * 100
+            $percent_str = ('{0:0.##}' -f $percent)
+            Write-Progress -Activity "(1/3) Exporting video to PNGs: ${basename}" -Status "${percent_str}% Complete (${current_fps} fps)" -PercentComplete $percent
+        }
     }
 }
 
 
-# Create blank files for ffmpeg
-1..$framecount | % {
-    $pad_num = ([string]$_).PadLeft(8,'0')
-    Set-Content -Path "out_frames/frame${pad_num}.png" -value $null
-}
+$jobExportPNGs = Start-Job –Name export1 –Scriptblock $scriptBlockExportPNGs -ArgumentList $basename,$extension,$framecount,$framerate,$input_file,$chunk_size,1
+$export_pngs_completing = $chunk_size
 
 
 $jobUpscalePNGs = Start-Job –Name upscale –Scriptblock {
@@ -73,6 +107,8 @@ $jobUpscalePNGs = Start-Job –Name upscale –Scriptblock {
         $framerate,
         $input_file
     )
+    # wait 30 seconds for export to get started
+    Start-Sleep -Seconds 30
     $cleanedup_until = 0
     $upscale_stopwatch = [System.Diagnostics.Stopwatch]::new()
     $upscale_stopwatch.Start()
@@ -91,7 +127,7 @@ $jobUpscalePNGs = Start-Job –Name upscale –Scriptblock {
             $fps = $frametime_queue.Count / $frametime_total
             $esrgan_progress = $esrgan_progress + 1
             $percent = ($esrgan_progress / $framecount) * 100
-            $percent_str = ('{0:0.#}' -f $percent)
+            $percent_str = ('{0:0.##}' -f $percent)
             $fps_str = ('{0:0.#}' -f $fps)
             $remaining_secs = ($framecount - $esrgan_progress) / $fps
             $remaining_timespan = [timespan]::fromseconds($remaining_secs)
@@ -111,15 +147,6 @@ $jobUpscalePNGs = Start-Job –Name upscale –Scriptblock {
 } -ArgumentList $basename,$extension,$framecount,$framerate,$input_file
 
 
-$wait_ffmpeg_stopwatch = [System.Diagnostics.Stopwatch]::new()
-$wait_ffmpeg_stopwatch.Start()
-while (($jobUpscalePNGs.State -ne "Completed") -and ($wait_ffmpeg_stopwatch.Elapsed.TotalMinutes -lt 3)) {
-    WriteJobProgress($jobUpscalePNGs);
-    Start-Sleep -Seconds 1
-}
-$wait_ffmpeg_stopwatch.Stop()
-
-
 $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
     Param(
         $basename,
@@ -128,6 +155,8 @@ $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
         $framerate,
         $input_file
     )
+    # wait 3 minutes for upscale to get started
+    Start-Sleep -Seconds 180
     $cleanedup_until = 0
     & ffmpeg -y -framerate $framerate -i out_frames/frame%08d.png -i $input_file -map 0:v:0 -map 1:a:0 -c:a copy -c:v libx265 -preset slow -crf 18 -r $framerate -pix_fmt yuv420p10le -x265-params profile=main10:bframes=8:psy-rd=1:aq-mode=3 -v warning -stats "upscaled_videos/${basename}_upscaled${extension}" 2>&1 | %{
         $found = $_ -match "frame=[ \t]*([0-9]+)[ \t]*fps=[ \t]*([0-9.]+)"
@@ -135,7 +164,7 @@ $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
             $current_frame = [int]$matches[1]
             $fps = [float]$matches[2]
             $percent = ($current_frame / $framecount) * 100
-            $percent_str = ('{0:0.#}' -f $percent)
+            $percent_str = ('{0:0.##}' -f $percent)
             $fps_str = ('{0:0.#}' -f $fps)
             $remaining_secs = ($framecount - $current_frame) / $fps
             $remaining_timespan = [timespan]::fromseconds($remaining_secs)
@@ -154,12 +183,35 @@ $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
 } -ArgumentList $basename,$extension,$framecount,$framerate,$input_file
 
 
-while (($jobUpscalePNGs.State -ne "Completed") -or ($jobFfmpeg.State -ne "Completed")) {
+$exportPNGsProgressId = Get-Random
+
+
+while (($jobExportPNGs.State -ne "Completed") -or ($jobUpscalePNGs.State -ne "Completed") -or ($jobFfmpeg.State -ne "Completed")) {
+    if ($jobExportPNGs.State -ne "Completed") {
+        WriteJobProgress $jobExportPNGs $exportPNGsProgressId
+    } else {
+        if (($jobUpscalePNGs.ChildJobs[0].Progress -ne $null) -and ($export_pngs_completing -lt $framecount)) {
+            $jobProgressHistory = $jobUpscalePNGs.ChildJobs[0].Progress;
+            $latestProgress = $jobProgressHistory[$jobProgressHistory.Count - 1];
+            $latestStatus = $latestProgress | Select -expand StatusDescription;
+            $found = $latestStatus -match "^([0-9.]+)\%"
+            if ($found) {
+                $percent = [float]$matches[1]
+                $upscale_frame = ($percent / 100) * $framecount
+                if ((($percent / 100) * $framecount) -gt ($export_pngs_completing - ($chunk_size / 4))) {
+                    # we need to run another batch
+                    $start_index = ($export_pngs_completing + 1)
+                    $jobExportPNGs = Start-Job –Name "export${start_index}" –Scriptblock $scriptBlockExportPNGs -ArgumentList $basename,$extension,$framecount,$framerate,$input_file,$chunk_size,$start_index
+                    $export_pngs_completing += $chunk_size
+                }
+            }
+        }
+    }
     if ($jobUpscalePNGs.State -ne "Completed") {
-        WriteJobProgress($jobUpscalePNGs);
+        WriteJobProgress $jobUpscalePNGs
     }
     if ($jobFfmpeg.State -ne "Completed") {
-        WriteJobProgress($jobFfmpeg);
+        WriteJobProgress $jobFfmpeg
     }
  
     Start-Sleep -Seconds 1

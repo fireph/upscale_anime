@@ -1,4 +1,4 @@
-$input_file_path = $args[0]
+$input_file_path = [Management.Automation.WildcardPattern]::Escape($args[0])
 if ((Test-Path -Path $input_file_path) -ne $true) {
     Write-Host "Can't find file ${input_file_path}, skipping upscale"
     Exit
@@ -82,11 +82,11 @@ $scriptBlockExportPNGs = {
         $start_index
     )
     $ffmpeg_start_index = $start_index - 1
-    $ffmpeg_end_index = (($start_index + $chunk_size),$framecount | Measure -Min).Minimum
+    $ffmpeg_end_index = (($ffmpeg_start_index + $chunk_size),$framecount | Measure -Min).Minimum
     & ffmpeg -y -i $input_file -vf "trim=start_frame=${ffmpeg_start_index}:end_frame=${ffmpeg_end_index}" -start_number $start_index -qscale:v 1 -qmin 1 -qmax 1 -fps_mode passthrough -v warning -stats tmp_frames/frame%08d.png 2>&1 | %{
         $found = $_ -match "frame=[ \t]*([0-9]+)[ \t]*fps=[ \t]*([0-9.]+)"
         if ($found) {
-            $current_frame = [int]$matches[1] + $start_index
+            $current_frame = [int]$matches[1] + $ffmpeg_start_index
             $current_fps = $matches[2]
             $percent = ($current_frame / $framecount) * 100
             $percent_str = ('{0:0.##}' -f $percent)

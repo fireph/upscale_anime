@@ -159,7 +159,7 @@ $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
     # wait 3 minutes for upscale to get started
     Start-Sleep -Seconds 180
     $cleanedup_until = 0
-    & ffmpeg -y -framerate $framerate -i out_frames/frame%08d.png -i $input_file -map 0:v:0 -map 1:a -map 1:s -c:a copy -c:s copy -c:v libx265 -preset slow -crf 18 -r $framerate -pix_fmt yuv420p10le -x265-params profile=main10:bframes=8:psy-rd=1:aq-mode=3 -v warning -stats "upscaled_videos/${basename}_upscaled${extension}" 2>&1 | %{
+    & ffmpeg -y -framerate $framerate -i out_frames/frame%08d.png -i $input_file -map 0:v:0 -map 1:a -map 1:s? -c:a copy -c:s copy -c:v libx265 -preset slow -crf 18 -r $framerate -pix_fmt yuv420p10le -x265-params profile=main10:bframes=8:psy-rd=1:aq-mode=3 -v warning -stats "upscaled_videos/${basename}_upscaled${extension}" 2>&1 | %{
         $found = $_ -match "frame=[ \t]*([0-9]+)[ \t]*fps=[ \t]*([0-9.]+)"
         if ($found) {
             $current_frame = [int]$matches[1]

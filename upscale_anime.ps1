@@ -93,6 +93,9 @@ $scriptBlockExportPNGs = {
             Write-Progress -Activity "(1/3) Exporting video to PNGs: ${basename}" -Status "${percent_str}% Complete (${current_fps} fps)" -PercentComplete $percent
         }
     }
+    if ($ffmpeg_end_index -eq $framecount) {
+        Write-Progress -Activity "(1/3) Exporting video to PNGs: ${basename}" -Status "100% Complete" -PercentComplete 100
+    }
 }
 
 
@@ -145,6 +148,7 @@ $jobUpscalePNGs = Start-Job –Name upscale –Scriptblock {
         }
     }
     $upscale_stopwatch.Stop()
+    Write-Progress -Activity "(2/3) Upscaling PNGs: ${basename}" -Status "100%" -PercentComplete 100
 } -ArgumentList $basename,$extension,$framecount,$framerate,$input_file
 
 
@@ -181,6 +185,7 @@ $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
             Write-Progress -Activity "(3/3) Encoding to video file: ${basename}" -Status "${percent_str}% (${fps_str} fps - ${remaining_str})" -PercentComplete $percent
         }
     }
+    Write-Progress -Activity "(3/3) Encoding to video file: ${basename}" -Status "100%" -PercentComplete 100
 } -ArgumentList $basename,$extension,$framecount,$framerate,$input_file
 
 

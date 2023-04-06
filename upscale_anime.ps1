@@ -44,7 +44,7 @@ if ((Test-Path ".\out_frames") -eq $true) {
 New-Item -Path ".\tmp_frames" -ItemType Directory -Force > $null
 New-Item -Path ".\out_frames" -ItemType Directory -Force > $null
 New-Item -Path ".\upscaled_videos" -ItemType Directory -Force > $null
-$framecount = ffprobe -count_frames -v error -select_streams v:0 -show_entries stream=nb_read_frames -of default=nokey=1:noprint_wrappers=1 $input_file
+$framecount = ffprobe -count_frames -v error -select_streams v:0 -show_entries stream=nb_read_frames -of default=nokey=1:noprint_wrappers=1 -threads 24 $input_file
 $framerate = ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=nokey=1:noprint_wrappers=1 $input_file
 Write-Host "Converting video with ${framecount} frames at ${framerate} fps"
 

@@ -44,8 +44,8 @@ if ((Test-Path ".\out_frames") -eq $true) {
 New-Item -Path ".\tmp_frames" -ItemType Directory -Force > $null
 New-Item -Path ".\out_frames" -ItemType Directory -Force > $null
 New-Item -Path ".\upscaled_videos" -ItemType Directory -Force > $null
-$framecount = ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets -of csv=p=0 $input_file
-$framerate = ffprobe -v error -select_streams v:0 -of default=noprint_wrappers=1:nokey=1 -show_entries stream=r_frame_rate $input_file
+$framecount = ffprobe -count_frames -v error -select_streams v:0 -show_entries stream=nb_read_frames -of default=nokey=1:noprint_wrappers=1 $input_file
+$framerate = ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=nokey=1:noprint_wrappers=1 $input_file
 Write-Host "Converting video with ${framecount} frames at ${framerate} fps"
 
 
@@ -163,6 +163,7 @@ $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
     # wait 3 minutes for upscale to get started
     Start-Sleep -Seconds 180
     $cleanedup_until = 0
+    # If resizing: -vf scale=-2:1080
     & ffmpeg -y -framerate $framerate -i out_frames/frame%08d.png -i $input_file -map 0:v:0 -map 1:a -map 1:s? -map_metadata 1 -map_chapters 1 -c:a copy -c:s copy -c:v libx265 -preset slow -crf 18 -r $framerate -pix_fmt yuv420p10le -x265-params profile=main10:bframes=8:psy-rd=1:aq-mode=3 -v warning -stats "upscaled_videos/${basename}_upscaled.mkv" 2>&1 | %{
         $found = $_ -match "frame=[ \t]*([0-9]+)[ \t]*fps=[ \t]*([0-9.]+)"
         if ($found) {

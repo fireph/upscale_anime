@@ -119,7 +119,7 @@ $jobUpscalePNGs = Start-Job –Name upscale –Scriptblock {
     $esrgan_progress = 0
     $frametime_queue = New-Object System.Collections.Queue
     $frametime_total = 0
-    & realesrgan-ncnn-vulkan -i tmp_frames -o out_frames -n realesr-animevideov3 -s 2 -j 2:4:4 -f png -v 2>&1 | %{
+    & realesrgan-ncnn-vulkan -i tmp_frames -o out_frames -n realesr-animevideov3 -s 2 -t 4096 -j 2:4:4 -f png -v 2>&1 | %{
         if ($_ -match "done$") {
             $frame_secs = $upscale_stopwatch.Elapsed.TotalSeconds
             $upscale_stopwatch.Restart()

@@ -1,9 +1,26 @@
-$input_file_path = [Management.Automation.WildcardPattern]::Escape($args[0])
+param (
+    [Parameter(Mandatory=$true)][string]$input_file_path_unescaped,
+    [Int32]$output_height = -2,
+    [Int32]$scale = 2
+)
+
+$input_file_path = [Management.Automation.WildcardPattern]::Escape($input_file_path_unescaped)
 if ((Test-Path -Path $input_file_path) -ne $true) {
     Write-Host "Can't find file ${input_file_path}, skipping upscale"
     Exit
 }
 $input_file = Get-Item $input_file_path
+
+if (($scale -ne 2) -and ($scale -ne 3) -and ($scale -ne 4)) {
+    Write-Host "Scale of ${scale} not supported (must be 2,3,4), skipping upscale"
+    Exit
+}
+
+if ($output_height % 2 -ne 0) {
+    Write-Host "Output height of ${output_height} not supported (must be even), skipping upscale"
+    Exit
+}
+
 
 #Accepts a Job as a parameter and writes the latest progress of it
 function WriteJobProgress($Job, $JobId) {
@@ -109,6 +126,7 @@ $jobUpscalePNGs = Start-Job –Name upscale –Scriptblock {
         $extension,
         $framecount,
         $framerate,
+        $scale,
         $input_file
     )
     # wait 30 seconds for export to get started
@@ -119,7 +137,7 @@ $jobUpscalePNGs = Start-Job –Name upscale –Scriptblock {
     $esrgan_progress = 0
     $frametime_queue = New-Object System.Collections.Queue
     $frametime_total = 0
-    & realesrgan-ncnn-vulkan -i tmp_frames -o out_frames -n realesr-animevideov3 -s 2 -t 4096 -j 2:4:4 -f png -v 2>&1 | %{
+    & realesrgan-ncnn-vulkan -i tmp_frames -o out_frames -n realesr-animevideov3 -s $scale -t 4096 -j 2:4:4 -f png -v 2>&1 | %{
         if ($_ -match "done$") {
             $frame_secs = $upscale_stopwatch.Elapsed.TotalSeconds
             $upscale_stopwatch.Restart()
@@ -149,7 +167,7 @@ $jobUpscalePNGs = Start-Job –Name upscale –Scriptblock {
     }
     $upscale_stopwatch.Stop()
     Write-Progress -Activity "(2/3) Upscaling PNGs: ${basename}" -Status "100%" -PercentComplete 100
-} -ArgumentList $basename,$extension,$framecount,$framerate,$input_file
+} -ArgumentList $basename,$extension,$framecount,$framerate,$scale,$input_file
 
 
 $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
@@ -158,13 +176,13 @@ $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
         $extension,
         $framecount,
         $framerate,
+        $output_height,
         $input_file
     )
     # wait 3 minutes for upscale to get started
     Start-Sleep -Seconds 180
     $cleanedup_until = 0
-    # If resizing: -vf scale=-2:1080
-    & ffmpeg -y -framerate $framerate -i out_frames/frame%08d.png -i $input_file -map 0:v:0 -map 1:a -map 1:s? -map_metadata 1 -map_chapters 1 -c:a copy -c:s copy -c:v libx265 -preset slow -crf 18 -r $framerate -pix_fmt yuv420p10le -x265-params profile=main10:bframes=8:psy-rd=1:aq-mode=3 -v warning -stats "upscaled_videos/${basename}_upscaled.mkv" 2>&1 | %{
+    & ffmpeg -y -framerate $framerate -i out_frames/frame%08d.png -i $input_file -map 0:v:0 -map 1:a -map 1:s? -map_metadata 1 -map_chapters 1 -c:a copy -c:s copy -c:v libx265 -preset slow -crf 18 -r $framerate -pix_fmt yuv420p10le -x265-params profile=main10:bframes=8:psy-rd=1:aq-mode=3 -vf "scale=-2:${output_height}" -v warning -stats "upscaled_videos/${basename}_upscaled.mkv" 2>&1 | %{
         $found = $_ -match "frame=[ \t]*([0-9]+)[ \t]*fps=[ \t]*([0-9.]+)"
         if ($found) {
             $current_frame = [int]$matches[1]
@@ -187,11 +205,12 @@ $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
         }
     }
     Write-Progress -Activity "(3/3) Encoding to video file: ${basename}" -Status "100%" -PercentComplete 100
-} -ArgumentList $basename,$extension,$framecount,$framerate,$input_file
+} -ArgumentList $basename,$extension,$framecount,$framerate,$output_height,$input_file
 
 
 $exportPNGsProgressId = Get-Random
 
+$wsh = New-Object -ComObject WScript.Shell
 
 while (($jobExportPNGs.State -ne "Completed") -or ($jobUpscalePNGs.State -ne "Completed") -or ($jobFfmpeg.State -ne "Completed")) {
     if ($jobExportPNGs.State -ne "Completed") {
@@ -221,6 +240,9 @@ while (($jobExportPNGs.State -ne "Completed") -or ($jobUpscalePNGs.State -ne "Co
         WriteJobProgress $jobFfmpeg
     }
  
+    # Keep computer from sleeping
+    $wsh.SendKeys('+{F15}')
+
     Start-Sleep -Seconds 1
 }
 

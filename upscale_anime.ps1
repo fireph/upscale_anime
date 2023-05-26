@@ -14,11 +14,15 @@ $input_file = Get-Item $input_file_path
 if (($scale -ne 2) -and ($scale -ne 3) -and ($scale -ne 4)) {
     Write-Host "Scale of ${scale} not supported (must be 2,3,4), skipping upscale"
     Exit
+} else {
+    Write-Host "Using scale of ${scale}"
 }
 
 if ($output_height % 2 -ne 0) {
     Write-Host "Output height of ${output_height} not supported (must be even), skipping upscale"
     Exit
+} else {
+    Write-Host "Using output height of ${output_height}"
 }
 
 

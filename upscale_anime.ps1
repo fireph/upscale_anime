@@ -141,7 +141,7 @@ $jobUpscalePNGs = Start-Job –Name upscale –Scriptblock {
     $esrgan_progress = 0
     $frametime_queue = New-Object System.Collections.Queue
     $frametime_total = 0
-    & realesrgan-ncnn-vulkan -i tmp_frames -o out_frames -n realesr-animevideov3 -s $scale -t 4096 -j 2:4:4 -f png -v 2>&1 | %{
+    & realesrgan-ncnn-vulkan -i tmp_frames -o out_frames -n realesr-animevideov3 -s $scale -t 4096 -j 2:3:3 -f png -v 2>&1 | %{
         if ($_ -match "done$") {
             $frame_secs = $upscale_stopwatch.Elapsed.TotalSeconds
             $upscale_stopwatch.Restart()
@@ -186,7 +186,7 @@ $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
     # wait 3 minutes for upscale to get started
     Start-Sleep -Seconds 180
     $cleanedup_until = 0
-    & ffmpeg -y -framerate $framerate -i out_frames/frame%08d.png -i $input_file -map 0:v:0 -map 1:a -map 1:s? -map_metadata 1 -map_chapters 1 -c:a copy -c:s copy -c:v libx265 -preset slow -crf 18 -r $framerate -pix_fmt yuv420p10le -x265-params profile=main10:bframes=8:psy-rd=1:aq-mode=3 -vf "scale=-2:${output_height}:filter=spline36" -v warning -stats "upscaled_videos/${basename}_upscaled.mkv" 2>&1 | %{
+    & ffmpeg -y -framerate $framerate -i out_frames/frame%08d.png -i $input_file -map 0:v:0 -map 1:a -map 1:s? -map_metadata 1 -map_chapters 1 -c:a copy -c:s copy -c:v libx265 -preset slow -crf 18 -r $framerate -pix_fmt yuv420p10le -x265-params profile=main10:bframes=8:psy-rd=1:aq-mode=3 -vf "scale=-2:${output_height}" -v warning -stats "upscaled_videos/${basename}_upscaled.mkv" 2>&1 | %{
         $found = $_ -match "frame=[ \t]*([0-9]+)[ \t]*fps=[ \t]*([0-9.]+)"
         if ($found) {
             $current_frame = [int]$matches[1]
@@ -215,6 +215,8 @@ $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
 $exportPNGsProgressId = Get-Random
 
 $wsh = New-Object -ComObject WScript.Shell
+
+$seconds_since_wake_key = 0
 
 while (($jobExportPNGs.State -ne "Completed") -or ($jobUpscalePNGs.State -ne "Completed") -or ($jobFfmpeg.State -ne "Completed")) {
     if ($jobExportPNGs.State -ne "Completed") {
@@ -245,7 +247,12 @@ while (($jobExportPNGs.State -ne "Completed") -or ($jobUpscalePNGs.State -ne "Co
     }
  
     # Keep computer from sleeping
-    $wsh.SendKeys('+{F15}')
+    if ($seconds_since_wake_key -ge 180) {
+        $wsh.SendKeys('+{F15}')
+        $seconds_since_wake_key = 0
+    } else {
+        $seconds_since_wake_key = $seconds_since_wake_key + 1
+    }
 
     Start-Sleep -Seconds 1
 }

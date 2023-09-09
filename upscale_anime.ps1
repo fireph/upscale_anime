@@ -6,20 +6,20 @@ param (
 
 $input_file_path = [Management.Automation.WildcardPattern]::Escape($input_file_path_unescaped)
 if ((Test-Path -Path $input_file_path) -ne $true) {
-    Write-Host "Can't find file ${input_file_path}, skipping upscale"
+    Write-Host -ForegroundColor Red "Can't find file ${input_file_path}, skipping upscale"
     Exit
 }
 $input_file = Get-Item $input_file_path
 
 if (($scale -ne 2) -and ($scale -ne 3) -and ($scale -ne 4)) {
-    Write-Host "Scale of ${scale} not supported (must be 2,3,4), skipping upscale"
+    Write-Host -ForegroundColor Red "Scale of ${scale} not supported (must be 2,3,4), skipping upscale"
     Exit
 } else {
     Write-Host "Using scale of ${scale}"
 }
 
 if ($output_height % 2 -ne 0) {
-    Write-Host "Output height of ${output_height} not supported (must be even), skipping upscale"
+    Write-Host -ForegroundColor Red "Output height of ${output_height} not supported (must be even), skipping upscale"
     Exit
 } else {
     Write-Host "Using output height of ${output_height}"
@@ -47,6 +47,7 @@ function WriteJobProgress($Job, $JobId) {
     }
 }
 
+$num_cpu_threads = (Get-WmiObject –class Win32_processor | Select -ExpandProperty NumberOfLogicalProcessors)
 
 $begin_stopwatch = [System.Diagnostics.Stopwatch]::new()
 $begin_stopwatch.Start()
@@ -65,7 +66,7 @@ if ((Test-Path ".\out_frames") -eq $true) {
 New-Item -Path ".\tmp_frames" -ItemType Directory -Force > $null
 New-Item -Path ".\out_frames" -ItemType Directory -Force > $null
 New-Item -Path ".\upscaled_videos" -ItemType Directory -Force > $null
-$framecount = ffprobe -count_frames -v error -select_streams v:0 -show_entries stream=nb_read_frames -of default=nokey=1:noprint_wrappers=1 -threads 24 $input_file
+$framecount = ffprobe -count_frames -v error -select_streams v:0 -show_entries stream=nb_read_frames -of default=nokey=1:noprint_wrappers=1 -threads $num_cpu_threads $input_file
 $framerate = ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=nokey=1:noprint_wrappers=1 $input_file
 Write-Host "Converting video with ${framecount} frames at ${framerate} fps"
 
@@ -186,7 +187,7 @@ $jobFfmpeg = Start-Job –Name ffmpeg –Scriptblock {
     # wait 3 minutes for upscale to get started
     Start-Sleep -Seconds 180
     $cleanedup_until = 0
-    & ffmpeg -y -framerate $framerate -i out_frames/frame%08d.png -i $input_file -map 0:v:0 -map 1:a -map 1:s? -map_metadata 1 -map_chapters 1 -c:a copy -c:s copy -c:v libx265 -preset slow -crf 18 -r $framerate -pix_fmt yuv420p10le -x265-params profile=main10:bframes=8:psy-rd=1:aq-mode=3 -vf "scale=-2:${output_height}" -v warning -stats "upscaled_videos/${basename}_upscaled.mkv" 2>&1 | %{
+    & ffmpeg -y -framerate $framerate -i out_frames/frame%08d.png -c:v libx265 -preset slow -crf 18 -r $framerate -pix_fmt yuv420p10le -x265-params profile=main10:bframes=8:psy-rd=1:aq-mode=3 -vf "scale=-2:${output_height}" -v warning -stats "upscaled_videos/${basename}_upscaled.hevc" 2>&1 | %{
         $found = $_ -match "frame=[ \t]*([0-9]+)[ \t]*fps=[ \t]*([0-9.]+)"
         if ($found) {
             $current_frame = [int]$matches[1]
@@ -257,6 +258,17 @@ while (($jobExportPNGs.State -ne "Completed") -or ($jobUpscalePNGs.State -ne "Co
     Start-Sleep -Seconds 1
 }
 
+$upscaled_framecount = ffprobe -count_frames -v error -select_streams v:0 -show_entries stream=nb_read_frames -of default=nokey=1:noprint_wrappers=1 -threads $num_cpu_threads "upscaled_videos/${basename}_upscaled.hevc"
+
+if ($upscaled_framecount -ne $framecount) {
+    Write-Host -ForegroundColor Red "Something went wrong, upscaled video is too short!"
+    Exit
+}
+
+Write-Host "Merging video with audio into ${basename}_upscaled.mkv"
+mkvmerge -q -o "upscaled_videos/${basename}_upscaled.mkv" -A -S -T -M -B --no-chapters --no-global-tags "upscaled_videos/${basename}_upscaled.hevc" -D $input_file
+
+rm "upscaled_videos/${basename}_upscaled.hevc"
 
 $elapsed_formatted = $begin_stopwatch.Elapsed.ToString("hh'h:'mm'm:'ss's'")
 $begin_stopwatch.Stop()

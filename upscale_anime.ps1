@@ -268,7 +268,7 @@ if ($upscaled_framecount -ne $framecount) {
 Write-Host "Merging video with audio into ${basename}_upscaled.mkv"
 mkvmerge -q -o "upscaled_videos/${basename}_upscaled.mkv" -A -S -T -M -B --no-chapters --no-global-tags "upscaled_videos/${basename}_upscaled.hevc" -D $input_file
 
-rm "upscaled_videos/${basename}_upscaled.hevc"
+Remove-Item -LiteralPath "upscaled_videos/${basename}_upscaled.hevc"
 
 $elapsed_formatted = $begin_stopwatch.Elapsed.ToString("hh'h:'mm'm:'ss's'")
 $begin_stopwatch.Stop()
